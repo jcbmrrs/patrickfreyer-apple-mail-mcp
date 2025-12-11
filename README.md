@@ -272,7 +272,7 @@ The MCP server provides 20 tools:
 | `list_email_attachments` | List attachments |
 | `save_email_attachment` | Download attachments |
 | `get_statistics` | Email analytics |
-| `export_emails` | Export to TXT/HTML |
+| `export_emails` | Export to TXT/HTML/Markdown (optional YAML frontmatter, attachment extraction) |
 
 ## Configuration
 

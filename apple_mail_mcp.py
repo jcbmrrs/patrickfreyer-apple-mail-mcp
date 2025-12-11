@@ -2410,9 +2410,12 @@ def export_emails(
     subject_keyword: Optional[str] = None,
     mailbox: str = "INBOX",
     save_directory: str = "~/Desktop",
-    format: str = "txt"
+    format: str = "txt",
+    include_frontmatter: bool = False,
+    tags: Optional[str] = None,
+    extract_media: bool = False
 ) -> str:
-    """
+    '''
     Export emails to files for backup or analysis.
 
     Args:
@@ -2421,21 +2424,132 @@ def export_emails(
         subject_keyword: Keyword to find email (required for single_email)
         mailbox: Mailbox to export from (default: "INBOX")
         save_directory: Directory to save exports (default: "~/Desktop")
-        format: Export format: "txt", "html" (default: "txt")
+        format: Export format: "txt", "html", "md" (default: "txt")
+        include_frontmatter: Include YAML frontmatter (subject, from, to/cc lists, date, mailbox, tags)
+        tags: Optional comma-separated tags for frontmatter (defaults to ["email"] when frontmatter is enabled)
+        extract_media: Save inline images/attachments to an assets subfolder and link them (Markdown only)
 
     Returns:
         Confirmation message with export location
-    """
+    '''
 
-    # Expand home directory
     import os
+
     save_dir = os.path.expanduser(save_directory)
+    allowed_formats = {"txt", "html", "md"}
+    if format not in allowed_formats:
+        return f"Error: Invalid format '{format}'. Use: txt, html, md"
+
+    include_frontmatter_flag = str(include_frontmatter).lower()
+    extract_media_flag = str(extract_media).lower()
+    tag_string = tags or ""
+
+    helper_functions = r'''
+    on sanitize_filename(rawName)
+        set tempName to my replace_text("/", "-", rawName)
+        set tempName to my replace_text(":", "-", tempName)
+        set tempName to my replace_text("\\", "-", tempName)
+        return tempName
+    end sanitize_filename
+
+    on join_list(theList, delimiter)
+        if theList is missing value then return ""
+        if (count of theList) is 0 then return ""
+        set AppleScript's text item delimiters to delimiter
+        set combined to theList as string
+        set AppleScript's text item delimiters to ""
+        return combined
+    end join_list
+
+    on buildTagList(rawTags, includeFrontmatter)
+        if not includeFrontmatter then return {}
+        if rawTags is missing value or rawTags is "" then
+            return {"email"}
+        end if
+        set AppleScript's text item delimiters to ","
+        set splitTags to text items of rawTags
+        set AppleScript's text item delimiters to ""
+        set cleanedTags to {}
+        repeat with t in splitTags
+            set trimmedTag to my trim_text(t as string)
+            if trimmedTag is not "" then
+                set end of cleanedTags to trimmedTag
+            end if
+        end repeat
+        if (count of cleanedTags) is 0 then
+            return {"email"}
+        else
+            return cleanedTags
+        end if
+    end buildTagList
+
+    on trim_text(theText)
+        if theText is missing value then return ""
+        set theChars to theText as string
+        if (length of theChars) = 0 then return ""
+        repeat while theChars begins with " " or theChars begins with tab
+            if (length of theChars) < 2 then exit repeat
+            set theChars to text 2 thru -1 of theChars
+        end repeat
+        repeat while theChars ends with " " or theChars ends with tab
+            if (length of theChars) < 2 then exit repeat
+            set theChars to text 1 thru -2 of theChars
+        end repeat
+        return theChars
+    end trim_text
+
+    on yaml_quote(theText)
+        set escapedText to my replace_text("\\", "\\\\", theText)
+        set escapedText to my replace_text("\"", "\\\"", escapedText)
+        return "\"" & escapedText & "\""
+    end yaml_quote
+
+    on replace_text(findString, replaceString, theText)
+        set AppleScript's text item delimiters to findString
+        set theItems to text items of theText
+        set AppleScript's text item delimiters to replaceString
+        set newText to theItems as string
+        set AppleScript's text item delimiters to ""
+        return newText
+    end replace_text
+
+    on build_frontmatter(subjectText, fromText, toList, ccList, messageDate, mailboxName, tagList)
+        set fm to "---" & return
+        set fm to fm & "subject: " & my yaml_quote(subjectText) & return
+        set fm to fm & "from: " & my yaml_quote(fromText) & return
+        set fm to fm & "to:" & return
+        if toList is not missing value and (count of toList) > 0 then
+            repeat with t in toList
+                set fm to fm & "  - " & my yaml_quote(t as string) & return
+            end repeat
+        else
+            set fm to fm & "  []" & return
+        end if
+        set fm to fm & "cc:" & return
+        if ccList is not missing value and (count of ccList) > 0 then
+            repeat with c in ccList
+                set fm to fm & "  - " & my yaml_quote(c as string) & return
+            end repeat
+        else
+            set fm to fm & "  []" & return
+        end if
+        set fm to fm & "date: " & my yaml_quote(messageDate as string) & return
+        set fm to fm & "mailbox: " & my yaml_quote(mailboxName) & return
+        set fm to fm & "tags:" & return
+        repeat with tg in tagList
+            set fm to fm & "  - " & my yaml_quote(tg as string) & return
+        end repeat
+        set fm to fm & "---"
+        return fm
+    end build_frontmatter
+    '''
 
     if scope == "single_email":
         if not subject_keyword:
             return "Error: 'subject_keyword' required for single_email scope"
 
         script = f'''
+        {helper_functions}
         tell application "Mail"
             set outputText to "EXPORTING EMAIL" & return & return
 
@@ -2472,31 +2586,88 @@ def export_emails(
                     set messageSender to sender of foundMessage
                     set messageDate to date received of foundMessage
                     set messageContent to content of foundMessage
+                    set toList to address of every to recipient of foundMessage
+                    set ccList to address of every cc recipient of foundMessage
+
+                    set includeFrontmatter to {include_frontmatter_flag}
+                    set extractMedia to {extract_media_flag}
+
+                    set rawTags to "{tag_string}"
+                    set tagList to my buildTagList(rawTags, includeFrontmatter)
 
                     -- Create safe filename
-                    set safeSubject to messageSubject
-                    set AppleScript's text item delimiters to "/"
-                    set safeSubjectParts to text items of safeSubject
-                    set AppleScript's text item delimiters to "-"
-                    set safeSubject to safeSubjectParts as string
-                    set AppleScript's text item delimiters to ""
+                    set safeSubject to my sanitize_filename(messageSubject)
 
                     set fileName to safeSubject & ".{format}"
                     set filePath to "{save_dir}/" & fileName
+
+                    set assetsDir to "{save_dir}/" & safeSubject & "_assets"
+                    set assetsDirName to safeSubject & "_assets"
+                    set savedAttachments to {{}}
+
+                    if extractMedia and "{format}" is "md" then
+                        try
+                            do shell script "mkdir -p " & quoted form of assetsDir
+                            set attachmentIndex to 0
+                            repeat with att in mail attachments of foundMessage
+                                set attachmentIndex to attachmentIndex + 1
+                                set attName to name of att
+                                if attName is missing value or attName is "" then
+                                    set attName to "attachment-" & attachmentIndex
+                                end if
+                                set safeAttName to my sanitize_filename(attName)
+                                set attPath to assetsDir & "/" & safeAttName
+                                set relPath to assetsDirName & "/" & safeAttName
+                                save att in POSIX file attPath
+                                set end of savedAttachments to {{fileName:safeAttName, filePath:relPath}}
+                            end repeat
+                        end try
+                    end if
+
+                    set frontmatter to ""
+                    if includeFrontmatter then
+                        set frontmatter to my build_frontmatter(messageSubject, messageSender, toList, ccList, messageDate, "{mailbox}", tagList)
+                    end if
+
+                    set toLine to my join_list(toList, ", ")
+                    set ccLine to my join_list(ccList, ", ")
 
                     -- Prepare export content
                     if "{format}" is "txt" then
                         set exportContent to "Subject: " & messageSubject & return
                         set exportContent to exportContent & "From: " & messageSender & return
+                        set exportContent to exportContent & "To: " & toLine & return
+                        set exportContent to exportContent & "Cc: " & ccLine & return
                         set exportContent to exportContent & "Date: " & (messageDate as string) & return & return
                         set exportContent to exportContent & messageContent
                     else if "{format}" is "html" then
                         set exportContent to "<html><body>"
                         set exportContent to exportContent & "<h2>" & messageSubject & "</h2>"
                         set exportContent to exportContent & "<p><strong>From:</strong> " & messageSender & "</p>"
+                        set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
+                        set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
                         set exportContent to exportContent & "<p><strong>Date:</strong> " & (messageDate as string) & "</p>"
                         set exportContent to exportContent & "<hr>" & messageContent
                         set exportContent to exportContent & "</body></html>"
+                    else if "{format}" is "md" then
+                        set exportContent to ""
+                        if includeFrontmatter then
+                            set exportContent to exportContent & frontmatter & return
+                        end if
+
+                        set exportContent to exportContent & "# " & messageSubject & return & return
+                        if messageSender is not missing value then
+                            set exportContent to exportContent & "> From: " & messageSender & return
+                        end if
+                        set exportContent to exportContent & "> Date: " & (messageDate as string) & return & return
+                        set exportContent to exportContent & messageContent
+
+                        if (count of savedAttachments) > 0 then
+                            set exportContent to exportContent & return & return & "## Attachments" & return & return
+                            repeat with attInfo in savedAttachments
+                                set exportContent to exportContent & "- [" & (fileName of attInfo) & "](" & (filePath of attInfo) & ")" & return
+                            end repeat
+                        end if
                     end if
 
                     -- Write to file
@@ -2526,6 +2697,7 @@ def export_emails(
 
     elif scope == "entire_mailbox":
         script = f'''
+        {helper_functions}
         tell application "Mail"
             set outputText to "EXPORTING MAILBOX" & return & return
 
@@ -2556,33 +2728,89 @@ def export_emails(
                         set messageSender to sender of aMessage
                         set messageDate to date received of aMessage
                         set messageContent to content of aMessage
+                        set toList to address of every to recipient of aMessage
+                        set ccList to address of every cc recipient of aMessage
+
+                        set includeFrontmatter to {include_frontmatter_flag}
+                        set extractMedia to {extract_media_flag}
+
+                        set rawTags to "{tag_string}"
+                        set tagList to my buildTagList(rawTags, includeFrontmatter)
 
                         -- Create safe filename with index
                         set exportCount to exportCount + 1
-                        set fileName to exportCount & "_" & messageSubject & ".{format}"
-
-                        -- Remove unsafe characters
-                        set AppleScript's text item delimiters to "/"
-                        set fileNameParts to text items of fileName
-                        set AppleScript's text item delimiters to "-"
-                        set fileName to fileNameParts as string
-                        set AppleScript's text item delimiters to ""
+                        set baseName to my sanitize_filename(exportCount & "_" & messageSubject)
+                        set fileName to baseName & ".{format}"
 
                         set filePath to exportDir & "/" & fileName
+
+                        set assetsDir to exportDir & "/" & baseName & "_assets"
+                        set assetsDirName to baseName & "_assets"
+                        set savedAttachments to {{}}
+
+                        if extractMedia and "{format}" is "md" then
+                            try
+                                do shell script "mkdir -p " & quoted form of assetsDir
+                                set attachmentIndex to 0
+                                repeat with att in mail attachments of aMessage
+                                    set attachmentIndex to attachmentIndex + 1
+                                    set attName to name of att
+                                    if attName is missing value or attName is "" then
+                                        set attName to "attachment-" & attachmentIndex
+                                    end if
+                                    set safeAttName to my sanitize_filename(attName)
+                                    set attPath to assetsDir & "/" & safeAttName
+                                    set relPath to assetsDirName & "/" & safeAttName
+                                    save att in POSIX file attPath
+                                    set end of savedAttachments to {{fileName:safeAttName, filePath:relPath}}
+                                end repeat
+                            end try
+                        end if
+
+                        set frontmatter to ""
+                        if includeFrontmatter then
+                            set frontmatter to my build_frontmatter(messageSubject, messageSender, toList, ccList, messageDate, "{mailbox}", tagList)
+                        end if
+
+                        set toLine to my join_list(toList, ", ")
+                        set ccLine to my join_list(ccList, ", ")
 
                         -- Prepare export content
                         if "{format}" is "txt" then
                             set exportContent to "Subject: " & messageSubject & return
                             set exportContent to exportContent & "From: " & messageSender & return
+                            set exportContent to exportContent & "To: " & toLine & return
+                            set exportContent to exportContent & "Cc: " & ccLine & return
                             set exportContent to exportContent & "Date: " & (messageDate as string) & return & return
                             set exportContent to exportContent & messageContent
                         else if "{format}" is "html" then
                             set exportContent to "<html><body>"
                             set exportContent to exportContent & "<h2>" & messageSubject & "</h2>"
                             set exportContent to exportContent & "<p><strong>From:</strong> " & messageSender & "</p>"
+                            set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
+                            set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
                             set exportContent to exportContent & "<p><strong>Date:</strong> " & (messageDate as string) & "</p>"
                             set exportContent to exportContent & "<hr>" & messageContent
                             set exportContent to exportContent & "</body></html>"
+                        else if "{format}" is "md" then
+                            set exportContent to ""
+                            if includeFrontmatter then
+                                set exportContent to exportContent & frontmatter & return
+                            end if
+
+                            set exportContent to exportContent & "# " & messageSubject & return & return
+                            if messageSender is not missing value then
+                                set exportContent to exportContent & "> From: " & messageSender & return
+                            end if
+                            set exportContent to exportContent & "> Date: " & (messageDate as string) & return & return
+                            set exportContent to exportContent & messageContent
+
+                            if (count of savedAttachments) > 0 then
+                                set exportContent to exportContent & return & return & "## Attachments" & return & return
+                                repeat with attInfo in savedAttachments
+                                    set exportContent to exportContent & "- [" & (fileName of attInfo) & "](" & (filePath of attInfo) & ")" & return
+                                end repeat
+                            end if
                         end if
 
                         -- Write to file
