@@ -2413,7 +2413,8 @@ def export_emails(
     format: str = "txt",
     include_frontmatter: bool = False,
     tags: Optional[str] = None,
-    extract_media: bool = False
+    extract_media: bool = False,
+    include_recipients: bool = False
 ) -> str:
     '''
     Export emails to files for backup or analysis.
@@ -2428,6 +2429,7 @@ def export_emails(
         include_frontmatter: Include YAML frontmatter (subject, from, to/cc lists, date, mailbox, tags)
         tags: Optional comma-separated tags for frontmatter (defaults to ["email"] when frontmatter is enabled)
         extract_media: Save inline images/attachments to an assets subfolder and link them (Markdown only)
+        include_recipients: Include To/Cc recipient fields in email body text (default: False for backward compatibility)
 
     Returns:
         Confirmation message with export location
@@ -2442,6 +2444,7 @@ def export_emails(
 
     include_frontmatter_flag = str(include_frontmatter).lower()
     extract_media_flag = str(extract_media).lower()
+    include_recipients_flag = str(include_recipients).lower()
     tag_string = tags or ""
 
     helper_functions = r'''
@@ -2636,16 +2639,20 @@ def export_emails(
                     if "{format}" is "txt" then
                         set exportContent to "Subject: " & messageSubject & return
                         set exportContent to exportContent & "From: " & messageSender & return
-                        set exportContent to exportContent & "To: " & toLine & return
-                        set exportContent to exportContent & "Cc: " & ccLine & return
+                        if "{include_recipients_flag}" is "true" then
+                            set exportContent to exportContent & "To: " & toLine & return
+                            set exportContent to exportContent & "Cc: " & ccLine & return
+                        end if
                         set exportContent to exportContent & "Date: " & (messageDate as string) & return & return
                         set exportContent to exportContent & messageContent
                     else if "{format}" is "html" then
                         set exportContent to "<html><body>"
                         set exportContent to exportContent & "<h2>" & messageSubject & "</h2>"
                         set exportContent to exportContent & "<p><strong>From:</strong> " & messageSender & "</p>"
-                        set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
-                        set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
+                        if "{include_recipients_flag}" is "true" then
+                            set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
+                            set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
+                        end if
                         set exportContent to exportContent & "<p><strong>Date:</strong> " & (messageDate as string) & "</p>"
                         set exportContent to exportContent & "<hr>" & messageContent
                         set exportContent to exportContent & "</body></html>"
@@ -2779,16 +2786,20 @@ def export_emails(
                         if "{format}" is "txt" then
                             set exportContent to "Subject: " & messageSubject & return
                             set exportContent to exportContent & "From: " & messageSender & return
-                            set exportContent to exportContent & "To: " & toLine & return
-                            set exportContent to exportContent & "Cc: " & ccLine & return
+                            if "{include_recipients_flag}" is "true" then
+                                set exportContent to exportContent & "To: " & toLine & return
+                                set exportContent to exportContent & "Cc: " & ccLine & return
+                            end if
                             set exportContent to exportContent & "Date: " & (messageDate as string) & return & return
                             set exportContent to exportContent & messageContent
                         else if "{format}" is "html" then
                             set exportContent to "<html><body>"
                             set exportContent to exportContent & "<h2>" & messageSubject & "</h2>"
                             set exportContent to exportContent & "<p><strong>From:</strong> " & messageSender & "</p>"
-                            set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
-                            set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
+                            if "{include_recipients_flag}" is "true" then
+                                set exportContent to exportContent & "<p><strong>To:</strong> " & toLine & "</p>"
+                                set exportContent to exportContent & "<p><strong>Cc:</strong> " & ccLine & "</p>"
+                            end if
                             set exportContent to exportContent & "<p><strong>Date:</strong> " & (messageDate as string) & "</p>"
                             set exportContent to exportContent & "<hr>" & messageContent
                             set exportContent to exportContent & "</body></html>"
